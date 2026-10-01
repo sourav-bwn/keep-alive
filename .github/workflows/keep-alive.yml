@@ -2,7 +2,7 @@ name: Keep Render services warm
 
 on:
   schedule:
-    # Runs every 10 minutes. The job itself reads config.json and only pings
+    # Runs every 10 minutes. Each job reads config.json and only pings
     # inside the chosen window (IST). Best-effort only.
     - cron: '3,13,23,33,43,53 * * * *'
   workflow_dispatch:
@@ -21,52 +21,54 @@ concurrency:
 
 jobs:
   ping:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: RIO
+            key: rio
+            url: https://rio-0znb.onrender.com/api/health
+          - name: NeotiaBot
+            key: neotiabot
+            url: https://college-admission-rag.onrender.com/
     steps:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: config.json
           persist-credentials: false
-      - name: Check endpoints when the schedule allows
+      - name: Gate
+        id: gate
         shell: bash
         env:
           FORCE: ${{ inputs.force }}
+          KEY: ${{ matrix.key }}
         run: |
-          set -uo pipefail
           enabled=$(jq -r '.enabled' config.json)
           start=$(jq -r '.start' config.json)
           end=$(jq -r '.end' config.json)
-          rio_on=$(jq -r '.apps.rio' config.json)
-          bot_on=$(jq -r '.apps.neotiabot' config.json)
+          app_on=$(jq -r ".apps.$KEY" config.json)
           now=$(TZ=Asia/Kolkata date +%H:%M)
-          echo "Now (IST): $now | window $start-$end | enabled=$enabled | force=$FORCE"
+          echo "Now (IST): $now | window $start-$end | enabled=$enabled | app=$app_on | force=$FORCE"
+          go=true
           if [ "$FORCE" != "true" ]; then
-            if [ "$enabled" != "true" ]; then echo "Paused in config.json. Skipping."; exit 0; fi
-            if [[ "$now" < "$start" || "$now" > "$end" ]]; then echo "Outside window. Skipping."; exit 0; fi
+            if [ "$enabled" != "true" ]; then echo "Paused in config.json."; go=false; fi
+            if [[ "$now" < "$start" || "$now" > "$end" ]]; then echo "Outside window."; go=false; fi
+            if [ "$app_on" != "true" ]; then echo "$KEY is switched off."; go=false; fi
           fi
-          ping_service() {
-            local name="$1" url="$2"
-            echo "Checking $name: $url"
-            # GET only: no sign-in, queries, student data, or database mutations.
-            if curl --fail --silent --show-error --location \
-              --connect-timeout 10 --max-time 80 \
-              --output /dev/null \
-              --write-out "$name HTTP %{http_code} in %{time_total}s\n" \
-              "$url"; then
-              return 0
-            else
-              echo "::error::$name did not return a successful HTTP response"
-              return 1
-            fi
-          }
-          pids=()
-          if [ "$rio_on" = "true" ]; then
-            ping_service RIO https://rio-0znb.onrender.com/api/health & pids+=($!)
-          else echo "RIO is switched off in config.json."; fi
-          if [ "$bot_on" = "true" ]; then
-            ping_service NeotiaBot https://college-admission-rag.onrender.com/ & pids+=($!)
-          else echo "NeotiaBot is switched off in config.json."; fi
-          result=0
-          for p in "${pids[@]}"; do wait "$p" || result=1; done
-          exit "$result"
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+      - name: Ping
+        if: steps.gate.outputs.go == 'true'
+        shell: bash
+        env:
+          NAME: ${{ matrix.name }}
+          URL: ${{ matrix.url }}
+        run: |
+          # GET only: no sign-in, queries, student data, or database mutations.
+          curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 80 \
+            --output /dev/null \
+            --write-out "$NAME HTTP %{http_code} in %{time_total}s\n" \
+            "$URL"
