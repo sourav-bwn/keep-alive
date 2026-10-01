@@ -129,9 +129,9 @@ async function checkOne(k){
   try{const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),70000);
     const r=await fetch(APPS[k],{signal:ctl.signal,cache:'no-store'});clearTimeout(to);const s=((performance.now()-t0)/1000).toFixed(1);
     dot.className='dot '+(r.ok?(s>8?'warn':'ok'):'bad');t.textContent=r.ok?(s>8?'Was asleep, now awake ('+s+'s)':'Awake ('+s+'s)'):'Problem: error '+r.status;
-  }catch(e){dot.className='dot';t.textContent='Live check blocked by the app\'s security. Use the last ping below.'}
+  }catch(e){dot.className='dot';t.textContent='Status comes from the last ping run'}
 }
-function checkApps(){checkOne('rio');checkOne('bot')}
+function checkApps(){checkOne('rio');checkOne('bot');lastRun()}
 function tok(){return localStorage.getItem('ka_token')}
 function saveToken(){const v=$('token').value.trim();if(v){localStorage.setItem('ka_token',v);$('token').value='';$('msg').textContent='Token saved on this device.'}}
 function forget(){localStorage.removeItem('ka_token');$('msg').textContent='Token removed from this device.'}
