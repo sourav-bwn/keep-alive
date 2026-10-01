@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Keep-alive control</title>
+<style>
+:root{--bg:#0f1420;--card:#192032;--text:#eef2fa;--mute:#9aa7c0;--ok:#35c27a;--bad:#ef5b5b;--warn:#f0b43c;--acc:#5b8cff}
+*{box-sizing:border-box}body{margin:0;font:16px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--text);padding:16px;max-width:560px;margin:auto}
+h1{font-size:22px;margin:8px 0 2px}h2{font-size:15px;margin:0 0 10px;color:var(--mute);text-transform:uppercase;letter-spacing:.05em}
+.sub{color:var(--mute);margin:0 0 16px}.card{background:var(--card);border-radius:14px;padding:16px;margin-bottom:14px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--mute);margin-right:8px}
+.ok{background:var(--ok)}.bad{background:var(--bad)}.warn{background:var(--warn)}
+.big{font-size:20px;font-weight:600}.mute{color:var(--mute);font-size:14px}
+input[type=time],input[type=password]{background:#0f1420;color:var(--text);border:1px solid #2c3652;border-radius:10px;padding:10px;font-size:18px;width:100%}
+label.sw{display:flex;justify-content:space-between;align-items:center;padding:10px 0}
+input[type=checkbox]{width:26px;height:26px;accent-color:var(--acc)}
+button,a.btn{display:block;width:100%;text-align:center;background:var(--acc);color:#fff;border:0;border-radius:12px;padding:13px;font-size:16px;font-weight:600;margin-top:10px;text-decoration:none;cursor:pointer}
+button.sec,a.btn.sec{background:#2a3555}button:disabled{opacity:.5}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.msg{margin-top:10px;font-size:14px}details{margin-top:12px}summary{cursor:pointer;color:var(--mute)}
+</style>
+</head>
+<body>
+<h1>Keep-alive control</h1>
+<p class="sub">Keeps RIO and NeotiaBot awake between your chosen times (IST).</p>
+
+<div class="card">
+  <h2>Right now</h2>
+  <div class="big" id="state">Loading...</div>
+  <div class="mute" id="clock"></div>
+</div>
+
+<div class="card">
+  <h2>Apps</h2>
+  <div class="row"><div><span class="dot" id="d-rio"></span><b>RIO</b><div class="mute" id="t-rio">checking...</div></div></div>
+  <div class="row"><div><span class="dot" id="d-bot"></span><b>NeotiaBot</b><div class="mute" id="t-bot">checking...</div></div></div>
+  <div class="mute" id="lastrun">Last ping run: loading...</div>
+  <button class="sec" onclick="checkApps()">Check again</button>
+  <div class="mute">A sleeping app can take up to a minute to wake up.</div>
+</div>
+
+<div class="card">
+  <h2>Schedule</h2>
+  <label class="sw"><span>Keep-alive on</span><input type="checkbox" id="enabled"></label>
+  <div class="two">
+    <div><div class="mute">Turn on at</div><input type="time" id="start"></div>
+    <div><div class="mute">Turn off at</div><input type="time" id="end"></div>
+  </div>
+  <label class="sw"><span>Keep RIO awake</span><input type="checkbox" id="rio"></label>
+  <label class="sw"><span>Keep NeotiaBot awake</span><input type="checkbox" id="bot"></label>
+  <div class="mute" id="hours"></div>
+  <button id="save" onclick="save()">Save schedule</button>
+  <div class="msg" id="msg"></div>
+  <details>
+    <summary>How saving works</summary>
+    <p class="mute">Saving writes a small file (config.json) in the GitHub repo. The pinger reads it on every run, so changes apply within 10 minutes. To save from this page, paste a GitHub token once. It is stored only in this browser and is sent only to GitHub (api.github.com) when you press Save. It is never written into the repo or sent anywhere else.</p>
+    <p class="mute">Create a "fine-grained token" for only the keep-alive repo with Contents: Read and write.</p>
+    <a class="btn sec" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create token on GitHub</a>
+    <input type="password" id="token" placeholder="Paste token here" style="margin-top:10px" autocomplete="off">
+    <button class="sec" onclick="saveToken()">Remember token on this device</button>
+    <button class="sec" onclick="forget()">Forget token</button>
+    <p class="mute">No token? Copy the settings and edit config.json on GitHub instead.</p>
+    <button class="sec" onclick="copyJson()">Copy settings</button>
+    <a class="btn sec" href="https://github.com/sourav-bwn/keep-alive/edit/main/config.json" target="_blank" rel="noopener">Open config.json on GitHub</a>
+  </details>
+</div>
+
+<div class="card">
+  <h2>Quick actions</h2>
+  <a class="btn" href="https://github.com/sourav-bwn/keep-alive/actions/workflows/keep-alive.yml" target="_blank" rel="noopener">Ping now (Run workflow, tick "Ping now")</a>
+  <a class="btn sec" href="https://github.com/sourav-bwn/keep-alive/actions" target="_blank" rel="noopener">See all runs</a>
+</div>
+
+<script>
+const REPO='sourav-bwn/keep-alive', API='https://api.github.com/repos/'+REPO;
+const APPS={rio:'https://rio-0znb.onrender.com/api/health',bot:'https://college-admission-rag.onrender.com/'};
+const $=id=>document.getElementById(id);
+let sha=null, cfg=null;
+function istNow(){const p=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date());return p}
+function fmt(t){const [h,m]=t.split(':').map(Number);return ((h%12)||12)+':'+String(m).padStart(2,'0')+(h<12?' AM':' PM')}
+function render(){
+  $('enabled').checked=cfg.enabled;$('start').value=cfg.start;$('end').value=cfg.end;
+  $('rio').checked=cfg.apps.rio;$('bot').checked=cfg.apps.neotiabot;updateState();
+}
+function readForm(){return {enabled:$('enabled').checked,start:$('start').value||'08:00',end:$('end').value||'22:00',apps:{rio:$('rio').checked,neotiabot:$('bot').checked}}}
+function updateState(){
+  const c=cfg,n=istNow();$('clock').textContent='Time in India now: '+fmt(n);
+  const inside=n>=c.start&&n<=c.end;
+  $('state').textContent=!c.enabled?'Paused (apps may sleep)':inside?'Keeping apps awake (until '+fmt(c.end)+')':'Off for now. Next start '+fmt(c.start);
+  const f=readForm();const [a,b]=f.start.split(':').map(Number),[x,y]=f.end.split(':').map(Number);
+  const hrs=Math.max(0,(x*60+y-a*60-b)/60),n2=(f.apps.rio?1:0)+(f.apps.neotiabot?1:0);
+  const tot=Math.round(hrs*n2*30);
+  $('hours').textContent='About '+tot+' of 750 free Render hours per month'+(tot>750?' (over the limit, apps may stop late in the month)':'');
+}
+['enabled','start','end','rio','bot'].forEach(i=>document.addEventListener('change',e=>{if(e.target.id===i)updateState2()}));
+function updateState2(){const keep=cfg;const f=readForm();cfg=f;updateState();cfg=keep;}
+async function load(){
+  try{const r=await fetch(API+'/contents/config.json?ref=main&t='+Date.now(),{headers:{Accept:'application/vnd.github+json'}});
+    const j=await r.json();sha=j.sha;cfg=JSON.parse(atob(j.content.replace(/\n/g,'')));render();}
+  catch(e){cfg={enabled:true,start:'08:00',end:'22:00',apps:{rio:true,neotiabot:true}};render();$('state').textContent='Could not load saved settings';}
+}
+async function lastRun(){
+  try{const r=await fetch(API+'/actions/workflows/keep-alive.yml/runs?per_page=1');const j=await r.json();const w=j.workflow_runs[0];
+    const ago=Math.round((Date.now()-new Date(w.created_at))/60000);
+    $('lastrun').textContent='Last ping run: '+(w.status==='completed'?(w.conclusion==='success'?'worked':'had a problem ('+w.conclusion+')'):'running now')+', '+ago+' min ago';
+  }catch(e){$('lastrun').textContent='Last ping run: unavailable';}
+}
+async function checkOne(k){
+  const dot=$('d-'+k),t=$('t-'+k);dot.className='dot';t.textContent='checking...';const t0=performance.now();
+  try{const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),70000);
+    try{const r=await fetch(APPS[k],{signal:ctl.signal,cache:'no-store'});const s=((performance.now()-t0)/1000).toFixed(1);
+      dot.className='dot '+(r.ok?'ok':'bad');t.textContent=r.ok?'Awake ('+s+'s)':'Problem: error '+r.status;}
+    catch(e){await fetch(APPS[k],{mode:'no-cors',signal:ctl.signal,cache:'no-store'});const s=((performance.now()-t0)/1000).toFixed(1);
+      dot.className='dot '+(s>8?'warn':'ok');t.textContent=s>8?'Was asleep, now answering ('+s+'s)':'Answering ('+s+'s)';}
+    clearTimeout(to);
+  }catch(e){dot.className='dot bad';t.textContent='Not answering';}
+}
+function checkApps(){checkOne('rio');checkOne('bot')}
+function tok(){return localStorage.getItem('ka_token')}
+function saveToken(){const v=$('token').value.trim();if(v){localStorage.setItem('ka_token',v);$('token').value='';$('msg').textContent='Token saved on this device.'}}
+function forget(){localStorage.removeItem('ka_token');$('msg').textContent='Token removed from this device.'}
+function copyJson(){navigator.clipboard.writeText(JSON.stringify(readForm(),null,2)+'\n');$('msg').textContent='Copied. Paste it into config.json on GitHub and commit.'}
+async function save(){
+  const t=tok();if(!t){$('msg').textContent='Add a token first (open "How saving works"), or use Copy settings.';return}
+  const f=readForm();if(f.end<=f.start){$('msg').textContent='Off time must be after on time.';return}
+  $('save').disabled=true;$('msg').textContent='Saving...';
+  try{
+    const body={message:'Update keep-alive schedule from control page',branch:'main',sha:sha,content:btoa(JSON.stringify(f,null,2)+'\n')};
+    const r=await fetch(API+'/contents/config.json',{method:'PUT',headers:{Authorization:'Bearer '+t,Accept:'application/vnd.github+json'},body:JSON.stringify(body)});
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.message||r.status);
+    sha=j.content.sha;cfg=f;render();$('msg').textContent='Saved. Takes effect on the next 10-minute check.';
+  }catch(e){$('msg').textContent='Could not save: '+e.message}
+  $('save').disabled=false;
+}
+load();lastRun();checkApps();setInterval(()=>{if(cfg)updateState()},30000);
+</script>
+</body>
+</html>
