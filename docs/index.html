@@ -34,9 +34,8 @@ button.sec,a.btn.sec{background:#2a3555}button:disabled{opacity:.5}
 
 <div class="card">
   <h2>Apps</h2>
-  <div class="row"><div><span class="dot" id="d-rio"></span><b>RIO</b><div class="mute" id="t-rio">checking...</div></div></div>
-  <div class="row"><div><span class="dot" id="d-bot"></span><b>NeotiaBot</b><div class="mute" id="t-bot">checking...</div></div></div>
-  <div class="mute" id="lastrun">Last ping run: loading...</div>
+  <div class="row"><div><span class="dot" id="d-rio"></span><b>RIO</b><div class="mute" id="t-rio">checking...</div><div class="mute" id="p-rio"></div></div></div>
+  <div class="row"><div><span class="dot" id="d-bot"></span><b>NeotiaBot</b><div class="mute" id="t-bot">checking...</div><div class="mute" id="p-bot"></div></div></div>
   <button class="sec" onclick="checkApps()">Check again</button>
   <div class="mute">A sleeping app can take up to a minute to wake up.</div>
 </div>
@@ -101,21 +100,36 @@ async function load(){
     const j=await r.json();sha=j.sha;cfg=JSON.parse(atob(j.content.replace(/\n/g,'')));render();}
   catch(e){cfg={enabled:true,start:'08:00',end:'22:00',apps:{rio:true,neotiabot:true}};render();$('state').textContent='Could not load saved settings';}
 }
+const JOBNAME={rio:'RIO',bot:'NeotiaBot'};
 async function lastRun(){
-  try{const r=await fetch(API+'/actions/workflows/keep-alive.yml/runs?per_page=1');const j=await r.json();const w=j.workflow_runs[0];
-    const ago=Math.round((Date.now()-new Date(w.created_at))/60000);
-    $('lastrun').textContent='Last ping run: '+(w.status==='completed'?(w.conclusion==='success'?'worked':'had a problem ('+w.conclusion+')'):'running now')+', '+ago+' min ago';
-  }catch(e){$('lastrun').textContent='Last ping run: unavailable';}
+  try{
+    const r=await fetch(API+'/actions/workflows/keep-alive.yml/runs?per_page=12');const j=await r.json();
+    const runs=j.workflow_runs.filter(w=>w.status==='completed');
+    const seen={};
+    for(const w of runs){
+      const jr=await fetch(API+'/actions/runs/'+w.id+'/jobs');const jj=await jr.json();
+      for(const job of (jj.jobs||[])){
+        const k=Object.keys(JOBNAME).find(x=>JOBNAME[x]===job.name);if(!k||seen[k])continue;
+        const ping=(job.steps||[]).find(s=>s.name==='Ping');
+        if(ping&&ping.conclusion!=='skipped'&&ping.conclusion){seen[k]={ok:ping.conclusion==='success',at:new Date(job.completed_at)};}
+      }
+      if(seen.rio&&seen.bot)break;
+    }
+    for(const k of Object.keys(JOBNAME)){
+      const el=$('p-'+k),s=seen[k];
+      if(!s){el.textContent='Last ping: none yet';continue}
+      const m=Math.round((Date.now()-s.at)/60000);
+      el.textContent='Last ping: '+(s.ok?'worked':'FAILED')+', '+(m<60?m+' min':Math.round(m/60)+' h')+' ago';
+      el.style.color=s.ok?'':'var(--bad)';
+    }
+  }catch(e){for(const k of Object.keys(JOBNAME))$('p-'+k).textContent='Last ping: unavailable'}
 }
 async function checkOne(k){
   const dot=$('d-'+k),t=$('t-'+k);dot.className='dot';t.textContent='checking...';const t0=performance.now();
   try{const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),70000);
-    try{const r=await fetch(APPS[k],{signal:ctl.signal,cache:'no-store'});const s=((performance.now()-t0)/1000).toFixed(1);
-      dot.className='dot '+(r.ok?'ok':'bad');t.textContent=r.ok?'Awake ('+s+'s)':'Problem: error '+r.status;}
-    catch(e){await fetch(APPS[k],{mode:'no-cors',signal:ctl.signal,cache:'no-store'});const s=((performance.now()-t0)/1000).toFixed(1);
-      dot.className='dot '+(s>8?'warn':'ok');t.textContent=s>8?'Was asleep, now answering ('+s+'s)':'Answering ('+s+'s)';}
-    clearTimeout(to);
-  }catch(e){dot.className='dot bad';t.textContent='Not answering';}
+    const r=await fetch(APPS[k],{signal:ctl.signal,cache:'no-store'});clearTimeout(to);const s=((performance.now()-t0)/1000).toFixed(1);
+    dot.className='dot '+(r.ok?(s>8?'warn':'ok'):'bad');t.textContent=r.ok?(s>8?'Was asleep, now awake ('+s+'s)':'Awake ('+s+'s)'):'Problem: error '+r.status;
+  }catch(e){dot.className='dot';t.textContent='Live check blocked by the app\'s security. Use the last ping below.'}
 }
 function checkApps(){checkOne('rio');checkOne('bot')}
 function tok(){return localStorage.getItem('ka_token')}
