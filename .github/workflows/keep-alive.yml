@@ -2,8 +2,11 @@ name: Keep Render services warm
 
 on:
   schedule:
+    # Active 8:00 AM to 10:00 PM IST (02:30 to 16:30 UTC), every 10 minutes.
     # Offset from the hour to reduce scheduling congestion. Best-effort only.
-    - cron: '3,13,23,33,43,53 * * * *'
+    - cron: '33,43,53 2 * * *'
+    - cron: '3,13,23,33,43,53 3-15 * * *'
+    - cron: '3,13,23 16 * * *'
   workflow_dispatch:
 
 permissions: {}
