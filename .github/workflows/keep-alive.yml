@@ -2,14 +2,18 @@ name: Keep Render services warm
 
 on:
   schedule:
-    # Active 8:00 AM to 10:00 PM IST (02:30 to 16:30 UTC), every 10 minutes.
-    # Offset from the hour to reduce scheduling congestion. Best-effort only.
-    - cron: '33,43,53 2 * * *'
-    - cron: '3,13,23,33,43,53 3-15 * * *'
-    - cron: '3,13,23 16 * * *'
+    # Runs every 10 minutes. The job itself reads config.json and only pings
+    # inside the chosen window (IST). Best-effort only.
+    - cron: '3,13,23,33,43,53 * * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Ping now even if outside the window or paused'
+        type: boolean
+        default: false
 
-permissions: {}
+permissions:
+  contents: read
 
 concurrency:
   group: render-keep-alive
@@ -20,10 +24,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Check RIO and NeotiaBot production endpoints
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: config.json
+          persist-credentials: false
+      - name: Check endpoints when the schedule allows
         shell: bash
+        env:
+          FORCE: ${{ inputs.force }}
         run: |
           set -uo pipefail
+          enabled=$(jq -r '.enabled' config.json)
+          start=$(jq -r '.start' config.json)
+          end=$(jq -r '.end' config.json)
+          rio_on=$(jq -r '.apps.rio' config.json)
+          bot_on=$(jq -r '.apps.neotiabot' config.json)
+          now=$(TZ=Asia/Kolkata date +%H:%M)
+          echo "Now (IST): $now | window $start-$end | enabled=$enabled | force=$FORCE"
+          if [ "$FORCE" != "true" ]; then
+            if [ "$enabled" != "true" ]; then echo "Paused in config.json. Skipping."; exit 0; fi
+            if [[ "$now" < "$start" || "$now" > "$end" ]]; then echo "Outside window. Skipping."; exit 0; fi
+          fi
           ping_service() {
             local name="$1" url="$2"
             echo "Checking $name: $url"
@@ -39,11 +60,13 @@ jobs:
               return 1
             fi
           }
-          ping_service RIO https://rio-0znb.onrender.com/api/health &
-          rio_pid=$!
-          ping_service NeotiaBot https://college-admission-rag.onrender.com/ &
-          bot_pid=$!
+          pids=()
+          if [ "$rio_on" = "true" ]; then
+            ping_service RIO https://rio-0znb.onrender.com/api/health & pids+=($!)
+          else echo "RIO is switched off in config.json."; fi
+          if [ "$bot_on" = "true" ]; then
+            ping_service NeotiaBot https://college-admission-rag.onrender.com/ & pids+=($!)
+          else echo "NeotiaBot is switched off in config.json."; fi
           result=0
-          wait "$rio_pid" || result=1
-          wait "$bot_pid" || result=1
+          for p in "${pids[@]}"; do wait "$p" || result=1; done
           exit "$result"
